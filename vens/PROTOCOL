@@ -1,0 +1,406 @@
+VENS WIFI PROTOCOL FOR FUJITSU SCANSNAP IX500
+
+          Reverse-engineered from packet captures of the macOS
+     ScanSnap Home application communicating with a ScanSnap iX500
+     over WiFi.
+
+          This document describes the network protocol used by
+     Fujitsu ScanSnap scanners with WiFi capability (iX500, possibly
+     iX1500 and others). The protocol is referred to as "VENS" after
+     the magic bytes in every packet.
+
+          Known to work with: ScanSnap iX500 (model FI-IX500A,
+     Silex WiFi module). May work with other ScanSnap models that
+     use WiFi — reports welcome.
+
+
+OVERVIEW
+
+          The protocol uses four network ports:
+
+       Port   Proto  Direction         Purpose
+       -----  -----  ----------------  ---------------------------
+       53220  UDP    scanner -> bcast  Discovery announcements
+       52217  UDP    client -> scanner Client registration
+       53219  TCP    bidirectional     Session handshake (3 connections)
+       53218  TCP    bidirectional     Scan commands and image data
+
+          All multi-byte integers are big-endian (network byte
+     order). The scanner's WiFi module is manufactured by Silex
+     Technology (OUI 00:80:92).
+
+
+PACKET FORMAT
+
+          All TCP packets on ports 53218 and 53219 share a common
+     envelope:
+
+       Offset  Size  Field
+       ------  ----  -----
+       0       4     Total packet length (including this header)
+       4       4     Magic "VENS" (0x56454e53)
+       8       4     Command/status field
+       12      4     Reserved (usually 0)
+
+          For client-to-scanner packets on 53218, the envelope is
+     followed by a 16-byte MAC block:
+
+       Offset  Size  Field
+       ------  ----  -----
+       16      6     Client MAC address
+       22      10    Zero padding
+
+       32+     var   Command payload (see SCAN SESSION)
+
+
+DISCOVERY (UDP PORT 53220)
+
+          The scanner periodically broadcasts to
+     255.255.255.255:53220. Packet is 48 bytes:
+
+       Offset  Size  Field
+       ------  ----  -----
+       0       4     Length (0x00000030 = 48)
+       4       4     Magic "VENS"
+       8       4     0x00000021
+       12      4     0x00000000
+       16      4     0x00000001
+       20      4     0x00000000
+       24      4     Scanner IP address
+       28      6     Scanner MAC address
+       34      14    Zero padding
+
+          Many consumer WiFi access points block or do not forward
+     these broadcasts. An alternative discovery method is to scan
+     the local subnet for hosts with TCP ports 53218 and 53219
+     both open.
+
+
+REGISTRATION (UDP PORT 52217)
+
+          The client sends three 32-byte UDP packets to the scanner
+     on port 52217. Each packet has a different magic and flags
+     value:
+
+       Packet  Magic                Flags
+       ------  -------------------  ------
+       1       "VENS" (0x56454e53)  0x0010
+       2       "ssNR" (0x73734e52)  0x0100
+       3       "V2ss" (0x56327373)  0x1000
+
+          Packet format:
+
+       Offset  Size  Field
+       ------  ----  -----
+       0       4     Magic (see above)
+       4       4     0x00000000 (packets 1-2) or 0x00000001 (packet 3)
+       8       4     Client IP address
+       12      6     Client MAC address
+       18      2     0x0000
+       20      2     0xd7e0 (protocol version?)
+       22      2     Flags (see above)
+       24      8     Zero padding
+
+          The macOS client sends this sequence 4 times. The scanner
+     responds to the first packet (VENS) with a 132-byte device info
+     response. The other two magics typically time out — this appears
+     to be normal.
+
+          Registration must be performed before the TCP handshake,
+     and again after the init session before scanning.
+
+
+TCP HANDSHAKE (PORT 53219)
+
+          Three separate short-lived TCP connections are made to
+     port 53219. On each connection, the scanner sends a 16-byte
+     hello first.
+
+     Connection 1 — Client Registration
+
+          Client sends a 128-byte registration packet:
+
+       Offset  Size  Field
+       ------  ----  -----
+       0       4     Length (0x00000080 = 128)
+       4       4     "VENS"
+       8       4     0x00000011
+       12      4     0x00000000
+       16      6     Client MAC address
+       22      10    Zero padding
+       32      4     0x00000006
+       36      1     0x1e
+       37      7     Zero padding
+       44      4     0x00000001
+       48      4     Client IP address
+       50      2     0xd7e1 (callback port = 55265)
+       52      12    Pairing key (see PAIRING KEY)
+       64      16    Zero padding
+       80      2     Year (big-endian, e.g. 0x07ea = 2026)
+       82      1     Month
+       83      1     Day
+       84      1     Hour
+       85      1     Minute
+       86      1     Second
+       87      1     0x00
+       88      8     Unknown (observed: 0x36c7c7e47a800000)
+       96      4     0xffff9d90
+       100     28    Zero padding
+
+          Scanner responds with 20 bytes. Byte offset 8 contains a
+     signed big-endian 32-bit status code:
+
+        0   Success
+       -1   Bad packet format
+       -2   Scanner serial mismatch
+       -3   Unknown pairing key
+       -4   Session busy / stale session
+       -5   No serial in packet
+       -7   Client IP mismatch (scanner paired to different client)
+
+     Connection 2 — Device Query
+
+          Client sends 32 bytes with command field 0x00000013.
+     Scanner responds with 112 bytes containing the device name
+     (e.g. "iX500-XXXXXXXXXX") as an ASCII string.
+
+     Connection 3 — Session Confirm
+
+          Client sends 32 bytes with command field 0x00000030.
+     Scanner responds with 32 bytes.
+
+          Connections 2 and 3 are made concurrently with the init
+     session from background threads.
+
+
+PAIRING KEY
+
+          The 12-byte ASCII string at offset 52 of the registration
+     packet is the pairing key. This is the serial number of the
+     Silex WiFi module inside the scanner — not the ScanSnap product
+     serial number.
+
+          The scanner validates this key against its own WiFi module
+     serial. If the key is wrong, the scanner responds with error
+     -3. If the key is correct but the client IP does not match the
+     paired client, the scanner responds with error -7.
+
+          The pairing key is established when the scanner is first
+     configured via the ScanSnap Home application (macOS/Windows).
+     The scanner never sends this key to the client — the client
+     must already know it.
+
+          To obtain the key on Linux without the official software,
+     broadcast discovery packets on the local network while ScanSnap
+     Home is running on another machine. ScanSnap Home will
+     automatically attempt to register and send its 128-byte
+     handshake packet containing the key. The real scanner must be
+     powered off or disconnected during this process to prevent
+     ScanSnap Home from connecting to it instead.
+
+
+SCAN SESSION (TCP PORT 53218)
+
+          All scan communication happens over TCP port 53218. The
+     scanner sends a 16-byte hello when the connection is
+     established.
+
+          Commands are sent as VENS packets (see PACKET FORMAT) with
+     a 16-byte MAC block followed by a command payload. Each command
+     gets a response in the same VENS packet format.
+
+     Init Session
+
+          A first TCP:53218 connection is used to initialize the
+     scanner state. Commands are sent sequentially:
+
+       Step  Cmd   Payload description
+       ----  ----  -------------------
+       1     0x12  Set mode (96 bytes payload)
+       2     0xE7  Query firmware info
+       3     0xC2  Query device status (32 bytes response)
+       4     0xE6  Query parameter (variant a: read)
+       5     0xE6  Query parameter (variant b: write)
+       6     0xD5  Set parameter (0x08, 0x08)
+       7     0xD6  Release session
+
+          The connection is closed after the D6 release. This
+     prepares the scanner for a new scan session.
+
+     Device Status (0xC2)
+
+          The 0xC2 query returns the scanner status inside a normal
+     VENS response (72 bytes total on an iX500). It must be issued
+     within an open session (after the 53219 handshake); on a bare
+     53218 connection the scanner accepts only 0xD6.
+
+          Byte 43 of the response is a feeder/tray flag:
+
+       C2[43] & 0x80 == 0x80   tray is EMPTY
+       C2[43] & 0x80 == 0x00   paper is present
+
+          This lets a client check for paper before starting a scan
+     rather than relying on the feeder-empty error at scan start (see
+     ERROR RECOVERY). The physical "paper loaded" LED on the scanner
+     tracks the same sensor. Calibrated by diffing the C2 response
+     with and without paper in the tray on an iX500; the byte offset
+     may differ on other models.
+
+     Scan Sequence
+
+          A second TCP:53218 connection is used for the actual scan:
+
+       Step  Cmd   Payload description
+       ----  ----  -------------------
+       1     0xC2  Query device status
+       2     0xD5  Set parameter (0x08, 0x08)
+       3     0xD8  Set parameter (zeros)
+       4     0xE9  Set scan area (DPI, width, height)
+       5     0xD4  Set scan config (color mode, DPI, dimensions)
+       6     0xC2  Re-query device status
+       7     0x03  Set ready (with 0x12 sub-type)
+       8     0xE0  Prepare for scan
+       9     0x0C  Start scan (with page counter)
+
+     Scan Config (0xD4)
+
+          The D4 command configures the scan. Key fields in its
+     80-byte payload:
+
+       Offset  Size  Field
+       ------  ----  -----
+       17      1     Color mode (0x03 = color)
+       18      1     0x01
+       19      1     0x01
+       20      2     0xd000
+       22      2     0xc180
+       24-29   6     0x808090 8080 00
+       48      1     0x30
+       50      1     0x01
+       52      2     DPI (big-endian, e.g. 0x012c = 300)
+       54      2     DPI (repeated)
+       56      2     Unknown (0x0581)
+       60      4     Width in pixels (big-endian)
+       64      4     Height in pixels (big-endian)
+       68      1     0x04
+
+          For A4 at 300 DPI, the captured values are:
+     Width: 0x000028d0 (10448), Height: 0x000044dc (17628).
+
+          These do not match the expected 210/25.4*300 = 2480
+     pixels. The scanner appears to use a different coordinate
+     system, possibly related to its maximum optical resolution.
+
+     Scan Start (0x0C)
+
+          The scan start command includes a page counter and side
+     indicator:
+
+       Offset  Size  Field
+       ------  ----  -----
+       0       4     0x0000000c
+       4       1     0x00
+       5       1     0x30 (even pages) or 0xb0 (odd pages = back side)
+       ...
+       10      1     Page counter (0, 1, 2, 3, ...)
+
+          Even page numbers are front sides, odd are back sides
+     (the scanner always scans duplex).
+
+     Per-page Flow
+
+          After the initial scan start, each page follows this
+     pattern:
+
+     Front side (even page counter):
+       1. Receive JPEG image data
+       2. Send 0x03 (ready) command
+       3. Send next scan start (odd counter, back side)
+
+     Back side (odd page counter):
+       1. Receive JPEG image data
+       2. Send 0x03 (ready)
+       3. Send done query (0x0C variant with 0x80 flag)
+       4. Receive response — check if more pages
+       5. Send 0xC2 query
+       6. Send 0xE0 prepare
+       7. Send 0x03 ready
+       8. Check response: if last 12 bytes are all zero, more
+          pages follow
+       9. Send next scan start (even counter, front side)
+
+     Session Release (0xD6)
+
+          After scanning is complete (or on error), the client MUST
+     send a D6 release command on a new TCP:53218 connection.
+     Failure to do so leaves the scanner in a busy state, causing
+     error -4 on the next handshake.
+
+       Command: 00000006 00000000 00000000 00000000
+                d6000000 00000000 00000000 00000000
+
+          The scanner responds with 40 bytes. After D6, close the
+     connection.
+
+
+IMAGE DATA FORMAT
+
+          The scanner responds to the scan start command with image
+     data:
+
+       Offset  Size  Field
+       ------  ----  -----
+       0       16    VENS header (length covers entire response)
+       16      16    MAC block
+       32      10    Image sub-header
+       42      var   JPEG data (starts with 0xFFD8)
+
+          The JPEG stream contains a comment marker with the string
+     "PFU ScanSnap #iX500". The stream ends with 0xFFD9.
+
+          Multiple pages are sent as a continuous stream on the same
+     TCP connection. The client must locate FFD8..FFD9 boundaries to
+     split individual pages.
+
+
+ERROR RECOVERY
+
+          If the scanner is in a busy state (error -4 on handshake),
+     send a D6 release on TCP:53218 before retrying. Sequence:
+
+       1. Connect to TCP:53218
+       2. Read 16-byte hello
+       3. Send D6 release command (see SESSION RELEASE)
+       4. Read response
+       5. Close connection
+       6. Wait 1 second
+       7. Retry from registration
+
+          If the feeder is empty, the scanner sends an error
+     response instead of image data after the scan start command.
+
+
+NOTES FOR OTHER SCANNER MODELS
+
+          This protocol was documented from an iX500. If you are
+     testing with a different ScanSnap model:
+
+     - The port numbers (53218, 53219, 52217, 53220) are likely
+       the same
+     - The VENS magic and packet envelope should be identical
+     - Command payloads (especially D4 scan config) may differ
+     - The scan area values in E9/D4 may need adjustment
+     - The 128-byte registration packet on 53219 may need
+       different fields
+
+          If you capture traffic from a different model, please
+     share your findings so this document can be updated.
+
+
+REFERENCES
+
+     - Scanner WiFi module: Silex Technology SX-SDMAC
+       (OUI 00:80:92)
+     - macOS client: ScanSnap Home by PFU (Fujitsu subsidiary)
+     - Protocol reverse-engineered by capturing traffic between
+       macOS client and scanner using Wireshark

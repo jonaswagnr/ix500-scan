@@ -1,0 +1,12 @@
+scansnap
+*.o
+*.pdf
+*.jpg
+.DS_Store
+*.pcapng
+handshake*.log
+config/
+output/
+__pycache__/
+*.pyc
+scans/

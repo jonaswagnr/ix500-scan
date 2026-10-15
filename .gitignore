@@ -1,0 +1,12 @@
+# Geheimnisse / persönliche Daten – niemals committen
+*.pcap
+ScanSnap iX500 ohne ScanSnap Home.md
+key
+hostid
+
+# Build
+app/.build/
+app/build/
+__pycache__/
+*.pyc
+.DS_Store
