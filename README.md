@@ -1,4 +1,4 @@
-# ScanSnap Lite
+# iX500 Scan
 
 Eigene Scan-Software für den **Fujitsu/PFU ScanSnap iX500** auf macOS, weil ScanSnap Home 3.7 nicht mehr gepflegt wird und unter macOS 27 hängt.
 

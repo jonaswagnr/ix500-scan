@@ -186,7 +186,7 @@ final class ScannerService: ObservableObject {
             notify("Scan fehlgeschlagen", e["message"] as? String ?? "")
         case "notice":
             lastMessage = e["message"] as? String
-            notify("ScanSnap", lastMessage ?? "")
+            notify("iX500 Scan", lastMessage ?? "")
         default:
             break
         }

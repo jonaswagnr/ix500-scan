@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "ScanSnapLite",
+    name: "IX500Scan",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "ScanSnapLite", path: "Sources/ScanSnapLite")
+        .executableTarget(name: "IX500Scan", path: "Sources/IX500Scan")
     ]
 )

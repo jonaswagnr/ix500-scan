@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hintergrunddienst für die ScanSnap-Lite-App.
+"""Hintergrunddienst für die iX500-Scan-App.
 
 Hält eine WLAN-Sitzung zum iX500, fragt 4x/s den Hardware-Status (0xC2) ab
 und scannt, wenn die Scan-Taste gedrückt wird oder die App es verlangt.

@@ -59,7 +59,7 @@ struct ScanSettings: Codable, Equatable {
     }
 
     static let fileURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/ScanSnapLite/settings.json")
+        .appendingPathComponent("Library/Application Support/iX500 Scan/settings.json")
 
     var outdirURL: URL {
         URL(fileURLWithPath: (outdir as NSString).expandingTildeInPath)

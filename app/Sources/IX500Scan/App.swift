@@ -2,12 +2,12 @@ import AppKit
 import SwiftUI
 
 @main
-struct ScanSnapLiteApp: App {
+struct IX500ScanApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var scanner = ScannerService()
 
     var body: some Scene {
-        Window("ScanSnap Lite", id: "main") {
+        Window("iX500 Scan", id: "main") {
             MainView()
                 .environmentObject(scanner)
                 .frame(minWidth: 560, idealWidth: 620, minHeight: 520, idealHeight: 640)
@@ -69,7 +69,7 @@ struct MenuBarContent: View {
             Button("Im Finder zeigen") { NSWorkspace.shared.open(scanner.settings.outdirURL) }
         }
         Divider()
-        Button("ScanSnap Lite öffnen") {
+        Button("iX500 Scan öffnen") {
             openWindow(id: "main")
             NSApp.activate()
         }

@@ -1,4 +1,4 @@
-# Posts: ScanSnap Lite
+# Posts: iX500 Scan
 
 ## X / Twitter (Bild: post-x.png)
 

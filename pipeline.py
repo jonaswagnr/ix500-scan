@@ -9,7 +9,7 @@ from PIL import Image
 
 import postprocess
 
-SETTINGS_PATH = os.path.expanduser("~/Library/Application Support/ScanSnapLite/settings.json")
+SETTINGS_PATH = os.path.expanduser("~/Library/Application Support/iX500 Scan/settings.json")
 
 DEFAULTS = {
     "scanner_ip": "",            # leer = automatisch suchen

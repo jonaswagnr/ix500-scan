@@ -5,7 +5,7 @@
     ./scan_wifi.py --mode gray --dpi 200 --quality 60
     ./scan_wifi.py --keep-blank --no-ocr --no-crop
 
-Einstellungen: ~/Library/Application Support/ScanSnapLite/settings.json
+Einstellungen: ~/Library/Application Support/iX500 Scan/settings.json
 Voraussetzung: ~/.config/scansnap/key und ~/.config/scansnap/hostid
 """
 import argparse, os, sys
