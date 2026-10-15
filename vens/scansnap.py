@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Original: https://github.com/bramheerink/scansnap (commit 5706688), GPL-2.0.
+# Geändert von Jonas Wagner, September/Oktober 2026: macOS-Unterstützung (MAC-Adresse),
+# HostID und lokale Zeit/Zeitzone im Handshake, on_page-Callback in scan().
 """scansnap — unified WiFi driver + diagnostics for the Fujitsu ScanSnap iX500.
 
 Speaks the reverse-engineered VENS protocol. One tool for everything:

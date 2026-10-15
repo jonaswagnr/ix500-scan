@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import PDFKit
 import UserNotifications
 
 /// Startet scansnapd.py, liest dessen JSON-Ereignisse und schickt Befehle.
@@ -26,6 +27,7 @@ final class ScannerService: ObservableObject {
     struct ScanResult: Identifiable, Hashable {
         let url: URL
         let date: Date
+        let pages: Int
         var id: URL { url }
     }
 
@@ -43,7 +45,18 @@ final class ScannerService: ObservableObject {
     private var stdin: FileHandle?
     private var buffer = Data()
 
+    /// Demo-Modus für Screenshots: SCANSNAP_DEMO=ready|scanning, SCANSNAP_DEMO_DIR=<Ordner mit PDFs>
+    private let demo = ProcessInfo.processInfo.environment["SCANSNAP_DEMO"]
+
     init() {
+        if let demo {
+            ip = "192.168.1.50"
+            paper = true
+            state = demo == "scanning" ? .scanning : .ready
+            progress = demo == "scanning" ? "Seite 3 empfangen" : nil
+            refreshRecent()
+            return
+        }
         settings.save()  // Datei mit allen Schlüsseln anlegen, damit der Dienst sie findet
         refreshRecent()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -110,6 +123,12 @@ final class ScannerService: ObservableObject {
     // MARK: Befehle
 
     func scan() { send(["cmd": "scan"]) }
+
+    /// Nach einem Fehler sofort neu suchen statt auf den nächsten Versuch zu warten.
+    func retry() {
+        state = .searching
+        send(["cmd": "resume"])
+    }
 
     func togglePause() {
         if state == .paused { send(["cmd": "resume"]); state = .starting }
@@ -184,15 +203,17 @@ final class ScannerService: ObservableObject {
     // MARK: Letzte Scans
 
     func refreshRecent() {
-        let dir = settings.outdirURL
+        let dir = ProcessInfo.processInfo.environment["SCANSNAP_DEMO_DIR"].map { URL(fileURLWithPath: $0) }
+            ?? settings.outdirURL
         let files = (try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
         recent = files.filter { $0.pathExtension.lowercased() == "pdf" }
             .compactMap { url in
                 let d = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-                return ScanResult(url: url, date: d ?? .distantPast)
+                return (url, d ?? .distantPast)
             }
-            .sorted { $0.date > $1.date }
-            .prefix(15).map { $0 }
+            .sorted { $0.1 > $1.1 }
+            .prefix(24)
+            .map { ScanResult(url: $0.0, date: $0.1, pages: PDFDocument(url: $0.0)?.pageCount ?? 0) }
     }
 }

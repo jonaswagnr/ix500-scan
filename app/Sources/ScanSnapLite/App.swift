@@ -10,10 +10,17 @@ struct ScanSnapLiteApp: App {
         Window("ScanSnap Lite", id: "main") {
             MainView()
                 .environmentObject(scanner)
-                .frame(minWidth: 620, minHeight: 560)
+                .frame(minWidth: 560, idealWidth: 620, minHeight: 520, idealHeight: 640)
+                .tint(.scanBlue)
                 .onAppear { delegate.scanner = scanner }
         }
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 620, height: 640)
+
+        Settings {
+            SettingsView().environmentObject(scanner)
+        }
 
         MenuBarExtra {
             MenuBarContent().environmentObject(scanner)
@@ -42,35 +49,43 @@ struct MenuBarContent: View {
         Text(statusLine)
         if let p = scanner.progress { Text(p) }
         Divider()
-        Button("Jetzt scannen") { scanner.scan() }
+        Button("Scannen") { scanner.scan() }
             .keyboardShortcut("s")
             .disabled(!scanner.state.isReady || scanner.paper == false)
-        Button(scanner.state == .paused ? "Scanner wieder verbinden" : "Scanner freigeben (Pause)") {
+        if case .offline = scanner.state {
+            Button("Erneut suchen") { scanner.retry() }
+        }
+        Button(scanner.state == .paused ? "Wieder verbinden" : "Scanner freigeben") {
             scanner.togglePause()
         }
         if !scanner.recent.isEmpty {
             Divider()
             Text("Letzte Scans")
             ForEach(scanner.recent.prefix(5)) { r in
-                Button(r.url.lastPathComponent) { NSWorkspace.shared.open(r.url) }
+                Button(r.date.formatted(.germanShort)) {
+                    NSWorkspace.shared.open(r.url)
+                }
             }
-            Button("Ablageordner öffnen") { NSWorkspace.shared.open(scanner.settings.outdirURL) }
+            Button("Im Finder zeigen") { NSWorkspace.shared.open(scanner.settings.outdirURL) }
         }
         Divider()
-        Button("Fenster öffnen …") {
+        Button("ScanSnap Lite öffnen") {
             openWindow(id: "main")
             NSApp.activate()
         }
-        .keyboardShortcut(",")
+        .keyboardShortcut("o")
+        SettingsLink { Text("Einstellungen …") }
+            .keyboardShortcut(",")
+        Divider()
         Button("Beenden") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 
     private var statusLine: String {
-        var s = scanner.state.label
-        if scanner.state.isReady, let paper = scanner.paper {
-            s += paper ? " · Papier eingelegt" : " · Einzug leer"
+        switch scanner.state {
+        case .ready: scanner.paper == false ? "Bereit, Einzug leer" : "Bereit, Papier liegt ein"
+        case .offline: "Scanner nicht gefunden"
+        default: scanner.state.label
         }
-        return s
     }
 }

@@ -1,228 +1,268 @@
 import AppKit
-import ServiceManagement
+import PDFKit
+import QuickLookThumbnailing
 import SwiftUI
 
+extension FormatStyle where Self == Date.FormatStyle {
+    /// „22. Sept., 20:32“ – unabhängig von der Systemsprache
+    static var germanShort: Date.FormatStyle {
+        .dateTime.day().month(.abbreviated).hour().minute().locale(Locale(identifier: "de_DE"))
+    }
+}
+
+/// Das Blau der Scan-Taste am iX500 – einzige Akzentfarbe der App.
+extension Color {
+    static let scanBlue = Color(red: 0.16, green: 0.47, blue: 1.0)
+}
+
 struct MainView: View {
-    var body: some View {
-        TabView {
-            ScanTab().tabItem { Label("Scannen", systemImage: "doc.viewfinder") }
-            SettingsTab().tabItem { Label("Einstellungen", systemImage: "gearshape") }
-        }
-        .padding()
-    }
-}
-
-// MARK: - Scannen
-
-struct ScanTab: View {
     @EnvironmentObject var scanner: ScannerService
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            StatusCard()
-            HStack {
-                Button {
-                    scanner.scan()
-                } label: {
-                    Label("Jetzt scannen", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .controlSize(.large)
-                .buttonStyle(.borderedProminent)
-                .disabled(!scanner.state.isReady || scanner.paper == false)
-
-                Button(scanner.state == .paused ? "Verbinden" : "Freigeben") { scanner.togglePause() }
-                    .controlSize(.large)
-                    .help("Gibt den Scanner frei, z. B. für ScanSnap Home oder die Kommandozeile")
-            }
-            if scanner.settings.buttonScan {
-                Text("Tipp: Die blaue Scan-Taste am Scanner startet den Scan ebenfalls.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Text("Letzte Scans").font(.headline)
-                Spacer()
-                Button("Ordner öffnen") { NSWorkspace.shared.open(scanner.settings.outdirURL) }
-                    .buttonStyle(.link)
-            }
-            List(scanner.recent) { r in
-                HStack {
-                    Image(systemName: "doc.richtext").foregroundStyle(.secondary)
-                    Text(r.url.lastPathComponent)
-                    Spacer()
-                    Text(r.date, format: .dateTime.day().month().year().hour().minute())
-                        .foregroundStyle(.secondary).font(.callout)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { NSWorkspace.shared.open(r.url) }
-                .contextMenu {
-                    Button("Öffnen") { NSWorkspace.shared.open(r.url) }
-                    Button("Im Finder zeigen") { NSWorkspace.shared.activateFileViewerSelecting([r.url]) }
-                }
-            }
-            .overlay {
-                if scanner.recent.isEmpty {
-                    Text("Noch keine Scans").foregroundStyle(.secondary)
-                }
-            }
+        VStack(spacing: 0) {
+            HeroView()
+                .padding(.horizontal, 32)
+                .padding(.top, 36)
+                .padding(.bottom, 28)
+            Divider()
+            RecentScansView()
         }
-        .padding()
+        .background(.background)
     }
 }
 
-struct StatusCard: View {
+// MARK: - Taste + Status
+
+struct HeroView: View {
     @EnvironmentObject var scanner: ScannerService
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 30))
-                .foregroundStyle(color)
-                .frame(width: 40)
-                .symbolEffect(.pulse, isActive: scanner.state == .scanning || scanner.state == .searching)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(scanner.state.label).font(.title3.weight(.semibold))
-                if let ip = scanner.ip {
-                    Text("ScanSnap iX500 · \(ip)").foregroundStyle(.secondary)
+        HStack(alignment: .center, spacing: 28) {
+            ScanButton()
+            VStack(alignment: .leading, spacing: 6) {
+                Text(headline)
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .contentTransition(.opacity)
+                if let detail {
+                    Text(detail)
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
                 }
-                if scanner.state.isReady, let paper = scanner.paper {
-                    Label(paper ? "Papier eingelegt" : "Einzug leer",
-                          systemImage: paper ? "doc.fill" : "tray")
-                        .foregroundStyle(paper ? .primary : .secondary)
+                if let ip = scanner.ip, !isProblem {
+                    Text("iX500 über WLAN, \(ip)")
+                        .font(.callout)
+                        .foregroundStyle(.tertiary)
                 }
-                if let p = scanner.progress {
-                    HStack { ProgressView().controlSize(.small); Text(p) }
-                }
-                if let m = scanner.lastMessage {
-                    Text(m).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                actions.padding(.top, 8)
+            }
+            Spacer(minLength: 0)
+        }
+        .animation(.easeOut(duration: 0.2), value: headline)
+    }
+
+    private var isProblem: Bool {
+        switch scanner.state {
+        case .offline, .noKey: true
+        default: false
+        }
+    }
+
+    private var headline: String {
+        switch scanner.state {
+        case .starting, .searching: "Suche Scanner"
+        case .ready: scanner.paper == false ? "Papier einlegen" : "Bereit zum Scannen"
+        case .scanning: "Scannt"
+        case .paused: "Scanner freigegeben"
+        case .offline: "Scanner nicht gefunden"
+        case .noKey: "Kopplung fehlt"
+        }
+    }
+
+    private var detail: String? {
+        switch scanner.state {
+        case .scanning: return scanner.progress
+        case .ready:
+            if let m = scanner.lastMessage { return m }
+            return scanner.paper == true
+                ? "Klick auf die Taste oder drück die Scan-Taste am Gerät."
+                : "Danach startet der Scan per Klick oder an der Taste am Scanner."
+        case .paused: return "Andere Programme können ihn jetzt benutzen."
+        case .offline(let m):
+            return m.contains("belegt")
+                ? "Ein anderes Programm nutzt ihn gerade, z. B. ScanSnap Home."
+                : "Ist er eingeschaltet und im selben WLAN?"
+        case .noKey: return "Schlüssel und HostID fehlen in ~/.config/scansnap/."
+        case .starting, .searching: return "Das dauert ein paar Sekunden."
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        switch scanner.state {
+        case .offline:
+            Button("Erneut suchen") { scanner.retry() }
+        case .paused:
+            Button("Wieder verbinden") { scanner.togglePause() }
+        case .ready:
+            Button("Scanner freigeben") { scanner.togglePause() }
+                .buttonStyle(.link)
+                .foregroundStyle(.secondary)
+                .help("Trennt die App vom Scanner, z. B. für ScanSnap Home oder die Kommandozeile")
+        default:
+            EmptyView()
+        }
+    }
+}
+
+/// Runde Taste nach Vorbild der iX500-Scan-Taste: leuchtet blau, wenn gescannt werden kann.
+struct ScanButton: View {
+    @EnvironmentObject var scanner: ScannerService
+    @State private var spin = false
+    @State private var pressed = false
+
+    private let size: CGFloat = 116
+
+    private var canScan: Bool { scanner.state.isReady && scanner.paper != false }
+    private var scanning: Bool { scanner.state == .scanning }
+    private var lit: Bool { canScan || scanning }
+
+    var body: some View {
+        Button { if canScan { scanner.scan() } } label: {
+            ZStack {
+                // Gehäuse-Einfassung
+                Circle()
+                    .fill(.quaternary)
+                    .overlay(Circle().strokeBorder(.separator, lineWidth: 1))
+                // Taste
+                Circle()
+                    .fill(lit ? AnyShapeStyle(Color.scanBlue.gradient) : AnyShapeStyle(Color.gray.opacity(0.35)))
+                    .padding(12)
+                    .shadow(color: lit ? .scanBlue.opacity(0.55) : .clear, radius: 18)
+                    .overlay(
+                        Circle()
+                            .strokeBorder(.white.opacity(lit ? 0.35 : 0.1), lineWidth: 1)
+                            .padding(12)
+                    )
+                Image(systemName: icon)
+                    .font(.system(size: 34, weight: .medium))
+                    .foregroundStyle(.white.opacity(lit ? 1 : 0.6))
+                    .contentTransition(.symbolEffect(.replace))
+                // Fortschritt beim Scannen
+                if scanning {
+                    Circle()
+                        .trim(from: 0, to: 0.28)
+                        .stroke(Color.scanBlue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .padding(3)
+                        .rotationEffect(.degrees(spin ? 360 : 0))
+                        .onAppear {
+                            withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) { spin = true }
+                        }
+                        .onDisappear { spin = false }
                 }
             }
-            Spacer()
+            .frame(width: size, height: size)
+            .scaleEffect(pressed ? 0.96 : 1)
         }
-        .padding()
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .buttonStyle(.plain)
+        // nicht .disabled: das würde die leuchtende Taste beim Scannen abblenden
+        .allowsHitTesting(canScan)
+        .accessibilityAddTraits(canScan ? [] : .isStaticText)
+        .keyboardShortcut(.return, modifiers: [])
+        .help(canScan ? "Scannen (↩)" : "")
+        .accessibilityLabel("Scannen")
+        .onLongPressGesture(minimumDuration: 0, pressing: { p in
+            withAnimation(.easeOut(duration: 0.1)) { pressed = p && canScan }
+        }, perform: {})
+        .animation(.easeInOut(duration: 0.3), value: lit)
     }
 
     private var icon: String {
         switch scanner.state {
-        case .ready: "checkmark.circle.fill"
         case .scanning: "doc.viewfinder.fill"
-        case .searching, .starting: "wifi"
-        case .paused: "pause.circle.fill"
-        case .offline, .noKey: "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var color: Color {
-        switch scanner.state {
-        case .ready: .green
-        case .scanning, .searching, .starting: .blue
-        case .paused: .secondary
-        case .offline, .noKey: .orange
+        case .offline, .noKey: "wifi.exclamationmark"
+        case .paused: "pause.fill"
+        case .starting, .searching: "wifi"
+        case .ready: scanner.paper == false ? "tray" : "doc.viewfinder"
         }
     }
 }
 
-// MARK: - Einstellungen
+// MARK: - Letzte Scans
 
-struct SettingsTab: View {
+struct RecentScansView: View {
     @EnvironmentObject var scanner: ScannerService
-    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
-    private let langs = [("deu+eng", "Deutsch + Englisch"), ("deu", "Deutsch"), ("eng", "Englisch")]
-    private let optimizeLabels = [0: "Aus", 1: "Verlustfrei", 2: "Stark (empfohlen)", 3: "Maximal"]
+    private let columns = [GridItem(.adaptive(minimum: 116, maximum: 150), spacing: 18, alignment: .top)]
 
     var body: some View {
-        Form {
-            Section("Bild") {
-                Picker("Farbmodus", selection: $scanner.settings.mode) {
-                    ForEach(ScanSettings.Mode.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                Picker("Auflösung", selection: $scanner.settings.dpi) {
-                    Text("150 dpi").tag(150); Text("200 dpi").tag(200); Text("300 dpi").tag(300)
-                }
-                .pickerStyle(.segmented)
-                LabeledContent("JPEG-Qualität") {
-                    HStack {
-                        Slider(value: qualityBinding, in: 40...95, step: 5)
-                        Text("\(scanner.settings.quality)").monospacedDigit().frame(width: 28)
-                    }
-                }
-                .disabled(scanner.settings.mode == .bw)
-                Toggle("Grauen Rand abschneiden", isOn: $scanner.settings.crop)
-                Toggle("Leere Seiten entfernen", isOn: $scanner.settings.removeBlank)
-                if scanner.settings.removeBlank {
-                    LabeledContent("Empfindlichkeit") {
-                        Picker("", selection: $scanner.settings.blankThreshold) {
-                            Text("Vorsichtig").tag(0.001)
-                            Text("Normal").tag(0.003)
-                            Text("Streng").tag(0.008)
-                        }
-                        .pickerStyle(.segmented).labelsHidden()
-                    }
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Letzte Scans").font(.headline)
+                Spacer()
+                Button("Im Finder zeigen") { NSWorkspace.shared.open(scanner.settings.outdirURL) }
+                    .buttonStyle(.link)
             }
+            .padding(.horizontal, 32)
+            .padding(.top, 20)
 
-            Section("PDF") {
-                Toggle("Texterkennung (durchsuchbares PDF)", isOn: $scanner.settings.ocr)
-                Picker("Sprachen", selection: $scanner.settings.ocrLangs) {
-                    ForEach(langs, id: \.0) { Text($0.1).tag($0.0) }
-                }
-                .disabled(!scanner.settings.ocr)
-                Picker("Komprimierung", selection: $scanner.settings.optimize) {
-                    ForEach(0...3, id: \.self) { Text(optimizeLabels[$0] ?? "\($0)").tag($0) }
-                }
-                .disabled(!scanner.settings.ocr)
-            }
-
-            Section("Ablage") {
-                LabeledContent("Ordner") {
-                    HStack {
-                        Text(scanner.settings.outdir).lineLimit(1).truncationMode(.middle)
-                        Button("Wählen …", action: chooseFolder)
+            if scanner.recent.isEmpty {
+                ContentUnavailableView("Noch keine Scans",
+                                       systemImage: "doc.on.doc",
+                                       description: Text("Fertige PDFs erscheinen hier und in \(scanner.settings.outdir)."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 22) {
+                        ForEach(scanner.recent) { ScanTile(result: $0) }
                     }
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 28)
                 }
-                TextField("Dateiname", text: $scanner.settings.filename)
-                Text("Platzhalter: %Y Jahr, %m Monat, %d Tag, %H%M%S Uhrzeit")
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle("PDF nach dem Scan öffnen", isOn: $scanner.settings.openAfter)
-            }
-
-            Section("Scanner") {
-                TextField("IP-Adresse", text: $scanner.settings.scannerIP, prompt: Text("automatisch suchen"))
-                Toggle("Scan-Taste am Gerät startet Scan", isOn: $scanner.settings.buttonScan)
-                Toggle("Beim Anmelden starten", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, on in
-                        do {
-                            if on { try SMAppService.mainApp.register() }
-                            else { try SMAppService.mainApp.unregister() }
-                        } catch {
-                            scanner.lastMessage = "Autostart: \(error.localizedDescription)"
-                            launchAtLogin = SMAppService.mainApp.status == .enabled
-                        }
-                    }
             }
         }
-        .formStyle(.grouped)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(.background.secondary)
     }
+}
 
-    private var qualityBinding: Binding<Double> {
-        Binding(get: { Double(scanner.settings.quality) },
-                set: { scanner.settings.quality = Int($0) })
-    }
+struct ScanTile: View {
+    let result: ScannerService.ScanResult
+    @State private var thumb: NSImage?
+    @State private var hover = false
 
-    private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.directoryURL = scanner.settings.outdirURL
-        if panel.runModal() == .OK, let url = panel.url {
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
-            scanner.settings.outdir = url.path.hasPrefix(home)
-                ? "~" + url.path.dropFirst(home.count) : url.path
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                if let thumb {
+                    Image(nsImage: thumb).resizable().scaledToFit()
+                } else {
+                    Rectangle().fill(.quaternary)
+                }
+            }
+            .frame(height: 150)
+            .frame(maxWidth: .infinity)
+            .background(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .shadow(color: .black.opacity(hover ? 0.28 : 0.16), radius: hover ? 8 : 3, y: hover ? 4 : 1)
+
+            Text(result.date.formatted(.germanShort))
+                .font(.callout)
+            Text(result.pages == 1 ? "1 Seite" : "\(result.pages) Seiten")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+        .onHover { h in withAnimation(.easeOut(duration: 0.15)) { hover = h } }
+        .onTapGesture(count: 2) { NSWorkspace.shared.open(result.url) }
+        .contextMenu {
+            Button("Öffnen") { NSWorkspace.shared.open(result.url) }
+            Button("Im Finder zeigen") { NSWorkspace.shared.activateFileViewerSelecting([result.url]) }
+        }
+        .help("\(result.url.lastPathComponent), Doppelklick öffnet das PDF")
+        .task(id: result.url) {
+            let req = QLThumbnailGenerator.Request(fileAt: result.url, size: CGSize(width: 150, height: 200),
+                                                   scale: NSScreen.main?.backingScaleFactor ?? 2,
+                                                   representationTypes: .thumbnail)
+            thumb = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: req).nsImage
         }
     }
 }

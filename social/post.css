@@ -1,0 +1,77 @@
+@font-face {
+  font-family: "SF Rounded";
+  src: url("file:///System/Library/Fonts/SFNSRounded.ttf");
+  font-weight: 100 900;
+}
+@font-face {
+  font-family: "SF Text";
+  src: url("file:///System/Library/Fonts/SFNS.ttf");
+  font-weight: 100 900;
+}
+
+:root {
+  --scan-blue: #2978ff;
+  --scan-blue-deep: #1d5fe0;
+  --ink: #ffffff;
+  --ink-soft: rgba(255, 255, 255, 0.78);
+  --ink-faint: rgba(255, 255, 255, 0.55);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  width: var(--w);
+  height: var(--h);
+  overflow: hidden;
+  background: var(--scan-blue);
+  color: var(--ink);
+  font-family: "SF Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  position: relative;
+}
+
+/* großer, angeschnittener Ring: Echo der runden Scan-Taste */
+.ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+}
+
+h1 {
+  font-family: "SF Rounded", system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.02;
+}
+
+.lede {
+  color: var(--ink-soft);
+  line-height: 1.35;
+}
+
+.facts {
+  list-style: none;
+  color: var(--ink);
+}
+.facts li {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+}
+.facts li::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: var(--ink);
+  flex: none;
+}
+
+.note {
+  color: var(--ink-faint);
+}
+
+.shot {
+  position: absolute;
+  display: block;
+}
