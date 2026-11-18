@@ -2,6 +2,7 @@
 # Original: https://github.com/bramheerink/scansnap (commit 5706688), GPL-2.0.
 # Geändert von Jonas Wagner, September/Oktober 2026: macOS-Unterstützung (MAC-Adresse),
 # HostID und lokale Zeit/Zeitzone im Handshake, on_page-Callback in scan().
+# Geändert von Philipp Dirding, November 2026: Keepalive-Handshake in scan(), Abbruchgrund mit --debug.
 """scansnap — unified WiFi driver + diagnostics for the Fujitsu ScanSnap iX500.
 
 Speaks the reverse-engineered VENS protocol. One tool for everything:
@@ -382,6 +383,8 @@ INIT_CMDS = [
     "00000006000000000000000000000000d6000000000000000000000000000000",
 ]
 
+KEEPALIVE_INTERVAL = 10
+
 def scan(ip, key, verbose=False, on_page=None):
     """Run a full scan session. Returns list of JPEG byte strings (pages).
     on_page(n) wird nach jeder empfangenen Seite aufgerufen."""
@@ -419,72 +422,105 @@ def scan(ip, key, verbose=False, on_page=None):
         if recv_vens(s) is None:
             raise RuntimeError("scan-setup afgebroken")
 
-    pages, prepend, pc, scanning = [], b"", 0, True
-    s.send(vens_pkt(mac, _scan_start_cmd(pc)))
-    if verbose:
-        print("  -> START SCAN")
-    while scanning:
-        s.settimeout(30)
-        image, prepend = prepend, b""
-        try:
-            while True:
-                chunk = s.recv(65536)
-                if not chunk:
-                    scanning = False; break
-                image += chunk
-                if b'\xff\xd9' in image:
-                    eoi = image.rfind(b'\xff\xd9')
-                    prepend = image[eoi + 2:]
-                    image = image[:eoi + 2]
-                    break
-        except socket.timeout:
-            pass
-        start = image.find(b'\xff\xd8')
-        if start < 0:
-            break
-        pages.append(image[start:])
-        if on_page:
-            on_page(len(pages))
-        if verbose:
-            print(f"    page {pc + 1}: {len(image[start:])} bytes")
+    # Scanner beendet die Sitzung nach ~40 s, auch mitten im Scan; ein neuer Handshake verlängert sie
+    alive = threading.Event()
 
-        if pc % 2 == 1:  # after a back page: between-sheet handshake
-            s.send(vens_pkt(mac, "0000000600000012000000000000000003000000120000000000000000000000"))
-            if recv_vens(s) is None:
-                break
-            s.send(vens_pkt(mac, _done_query_cmd(pc))); recv_vens(s)
-            s.send(vens_pkt(mac, "0000000a000000200000000000000000c2000000000000002000000000000000")); recv_vens(s)
-            s.send(vens_pkt(mac, "00000006000000000000000000000000e0000000000000000000000000000000")); recv_vens(s)
-            s.send(vens_pkt(mac, "0000000600000012000000000000000003000000120000000000000000000000"))
-            resp = recv_vens(s)
-            if resp is None or resp[-12:] != b'\x00' * 12:
-                break  # no more sheets
-            pc += 1
-            s.send(vens_pkt(mac, _scan_start_cmd(pc)))
-            s.settimeout(15)
+    def keepalive():
+        while not alive.wait(KEEPALIVE_INTERVAL):
             try:
-                ack = s.recv(256)
-            except socket.timeout:
-                break
-            if not ack:
-                break
-            if b'\xff\xd8' in ack:
-                prepend = ack
-        else:            # after a front page: request the back page
-            s.send(vens_pkt(mac, "0000000600000012000000000000000003000000120000000000000000000000"))
-            if recv_vens(s) is None:
-                break
-            pc += 1
-            s.send(vens_pkt(mac, _scan_start_cmd(pc)))
-            s.settimeout(10)
+                err, _ = handshake_code(ip, mac, my_ip, key)
+            except OSError as e:
+                err = e
+            if verbose:
+                print(f"    keepalive ({time.monotonic() - t0:.0f} s): handshake err={err}")
+
+    def stop(reason, data=None):
+        # Grund für das Scan-Ende, nur mit --debug
+        if verbose:
+            extra = f" ({data.hex()})" if data else ""
+            print(f"  <- STOP after {len(pages)} pages, {time.monotonic() - t0:.0f} s: {reason}{extra}")
+
+    pages, prepend, pc, scanning = [], b"", 0, True
+    t0 = time.monotonic()
+    threading.Thread(target=keepalive, daemon=True).start()
+    try:
+        s.send(vens_pkt(mac, _scan_start_cmd(pc)))
+        if verbose:
+            print("  -> START SCAN")
+        while scanning:
+            s.settimeout(30)
+            image, prepend = prepend, b""
             try:
-                ack = s.recv(256)
+                while True:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        stop("connection closed by scanner")
+                        scanning = False; break
+                    image += chunk
+                    if b'\xff\xd9' in image:
+                        eoi = image.rfind(b'\xff\xd9')
+                        prepend = image[eoi + 2:]
+                        image = image[:eoi + 2]
+                        break
             except socket.timeout:
+                if verbose:
+                    print(f"    timeout receiving image ({len(image)} bytes)")
+            start = image.find(b'\xff\xd8')
+            if start < 0:
+                stop("no image start received", image[:64])
                 break
-            if not ack:
-                break
-            if b'\xff\xd8' in ack:
-                prepend = ack
+            pages.append(image[start:])
+            if on_page:
+                on_page(len(pages))
+            if verbose:
+                print(f"    page {pc + 1}: {len(image[start:])} bytes")
+
+            if pc % 2 == 1:  # after a back page: between-sheet handshake
+                s.send(vens_pkt(mac, "0000000600000012000000000000000003000000120000000000000000000000"))
+                if recv_vens(s) is None:
+                    stop("no reply to request sense after back page")
+                    break
+                s.send(vens_pkt(mac, _done_query_cmd(pc))); recv_vens(s)
+                s.send(vens_pkt(mac, "0000000a000000200000000000000000c2000000000000002000000000000000")); recv_vens(s)
+                s.send(vens_pkt(mac, "00000006000000000000000000000000e0000000000000000000000000000000")); recv_vens(s)
+                s.send(vens_pkt(mac, "0000000600000012000000000000000003000000120000000000000000000000"))
+                resp = recv_vens(s)
+                if resp is None or resp[-12:] != b'\x00' * 12:
+                    stop("no more sheets", resp)
+                    break  # no more sheets
+                pc += 1
+                s.send(vens_pkt(mac, _scan_start_cmd(pc)))
+                s.settimeout(15)
+                try:
+                    ack = s.recv(256)
+                except socket.timeout:
+                    stop("timeout after starting next sheet")
+                    break
+                if not ack:
+                    stop("connection closed after starting next sheet")
+                    break
+                if b'\xff\xd8' in ack:
+                    prepend = ack
+            else:            # after a front page: request the back page
+                s.send(vens_pkt(mac, "0000000600000012000000000000000003000000120000000000000000000000"))
+                if recv_vens(s) is None:
+                    stop("no reply to request sense after front page")
+                    break
+                pc += 1
+                s.send(vens_pkt(mac, _scan_start_cmd(pc)))
+                s.settimeout(10)
+                try:
+                    ack = s.recv(256)
+                except socket.timeout:
+                    stop("timeout after requesting back page")
+                    break
+                if not ack:
+                    stop("connection closed after requesting back page")
+                    break
+                if b'\xff\xd8' in ack:
+                    prepend = ack
+    finally:
+        alive.set()
 
     # cleanup: FIN, then a brief D6-release connection like the Mac does
     try:

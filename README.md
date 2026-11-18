@@ -58,7 +58,7 @@ app/build.sh install                      # App bauen und nach /Applications kop
 - **Handshake-Bytes 108–115** enthalten die HostID des gekoppelten Rechners. Ist sie falsch, antwortet der Scanner mit `-7`.
 - **Bytes 100–106** tragen Datum und Uhrzeit, **116–119** den UTC-Offset in Sekunden (UTC − lokal).
 - **0xC2 (GET HARDWARE STATUS):** Byte 43 Bit `0x80` bedeutet Einzug leer, Byte 44 Bit `0x01` Scan-Taste gedrückt.
-- Der Scanner beendet eine offene Sitzung nach etwa 40 s.
+- Der Scanner beendet eine offene Sitzung nach etwa 40 s, auch mitten im Scan. Ein erneuter Handshake setzt die Frist zurück; UDP-Registrierung oder Session Confirm (0x30) reichen nicht.
 - Per WLAN kommen die Bilder immer als Farbe, 300 dpi, 180° gedreht, mit Scanner-Hintergrund.
 
 ## Lizenz
