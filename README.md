@@ -13,7 +13,7 @@ Eigene Scan-Software für den **Fujitsu/PFU ScanSnap iX500** auf macOS, weil Sca
 brew install sane-backends ocrmypdf img2pdf tesseract-lang
 ```
 
-Python 3 mit Pillow (`/usr/bin/python3`), Xcode 15+ für die App.
+Python 3 mit Pillow (`python3` aus dem `PATH`, also meist Homebrew; gilt auch für die App), Xcode 15+ für die App.
 
 ## Einmalig: Kopplungsschlüssel
 

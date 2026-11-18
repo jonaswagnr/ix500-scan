@@ -44,6 +44,9 @@ final class ScannerService: ObservableObject {
     private var process: Process?
     private var stdin: FileHandle?
     private var buffer = Data()
+    /// Letzte Fehlerzeile des Dienstes, damit ein Absturz in der App sichtbar wird
+    private var lastStderrLine: String?
+    private var restartTask: Task<Void, Never>?
 
     /// Demo-Modus für Screenshots: SCANSNAP_DEMO=ready|scanning, SCANSNAP_DEMO_DIR=<Ordner mit PDFs>
     private let demo = ProcessInfo.processInfo.environment["SCANSNAP_DEMO"]
@@ -57,6 +60,7 @@ final class ScannerService: ObservableObject {
             refreshRecent()
             return
         }
+        signal(SIGPIPE, SIG_IGN)  // Schreiben an einen beendeten Dienst soll die App nicht beenden
         settings.save()  // Datei mit allen Schlüsseln anlegen, damit der Dienst sie findet
         refreshRecent()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -71,9 +75,14 @@ final class ScannerService: ObservableObject {
             state = .offline("Python-Dateien fehlen im App-Bundle")
             return
         }
+        restartTask?.cancel()
+        restartTask = nil
+        lastStderrLine = nil
+
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        p.arguments = ["-u", scripts.appendingPathComponent("scansnapd.py").path]
+        // Dasselbe python3 wie die Skripte (#!/usr/bin/env python3), Homebrew zuerst
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = ["python3", "-u", scripts.appendingPathComponent("scansnapd.py").path]
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         p.environment = env
@@ -84,19 +93,36 @@ final class ScannerService: ObservableObject {
         p.standardError = err
         out.fileHandleForReading.readabilityHandler = { [weak self] h in
             let data = h.availableData
+            if data.isEmpty { h.readabilityHandler = nil; return }  // EOF
             Task { @MainActor in self?.consume(data) }
         }
-        err.fileHandleForReading.readabilityHandler = { h in
-            if let s = String(data: h.availableData, encoding: .utf8), !s.isEmpty {
-                FileHandle.standardError.write(Data(("[scansnapd] " + s).utf8))
+        err.fileHandleForReading.readabilityHandler = { [weak self] h in
+            let data = h.availableData
+            if data.isEmpty { h.readabilityHandler = nil; return }  // EOF
+            guard let s = String(data: data, encoding: .utf8) else { return }
+            FileHandle.standardError.write(Data(("[scansnapd] " + s).utf8))
+            let line = s.split(whereSeparator: \.isNewline).last.map(String.init)?
+                .trimmingCharacters(in: .whitespaces)
+            if let line, !line.isEmpty {
+                Task { @MainActor in self?.lastStderrLine = line }
             }
         }
+        let started = Date()
         p.terminationHandler = { [weak self] proc in
             Task { @MainActor in
                 guard let self, self.process === proc else { return }
-                self.state = .offline("Dienst beendet – starte neu …")
-                try? await Task.sleep(for: .seconds(3))
-                self.start()
+                self.process = nil
+                self.stdin = nil
+                // Bricht der Dienst gleich beim Start ab (z. B. fehlendes Modul), seltener neu versuchen
+                let crashedEarly = Date().timeIntervalSince(started) < 5
+                let delay: Double = crashedEarly ? 30 : 3
+                let reason = self.lastStderrLine.map { "Dienst abgebrochen: \($0)" } ?? "Dienst beendet"
+                self.state = .offline("\(reason) – neuer Versuch in \(Int(delay)) s")
+                self.restartTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled, let self, self.process == nil else { return }
+                    self.start()
+                }
             }
         }
         do {
@@ -116,8 +142,12 @@ final class ScannerService: ObservableObject {
     }
 
     private func send(_ cmd: [String: String]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: cmd) else { return }
-        stdin?.write(data + Data("\n".utf8))
+        guard let stdin, let data = try? JSONSerialization.data(withJSONObject: cmd) else { return }
+        do {
+            try stdin.write(contentsOf: data + Data("\n".utf8))
+        } catch {
+            self.stdin = nil  // Dienst beendet, terminationHandler startet ihn neu
+        }
     }
 
     // MARK: Befehle
@@ -127,7 +157,8 @@ final class ScannerService: ObservableObject {
     /// Nach einem Fehler sofort neu suchen statt auf den nächsten Versuch zu warten.
     func retry() {
         state = .searching
-        send(["cmd": "resume"])
+        if process == nil { start() }
+        else { send(["cmd": "resume"]) }
     }
 
     func togglePause() {
